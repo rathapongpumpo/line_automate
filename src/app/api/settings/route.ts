@@ -1,0 +1,5 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { db } from "@/lib/db";
+const schema=z.object({storeName:z.string().trim().min(2).max(80),phone:z.string().trim().min(8).max(30),welcomeMessage:z.string().trim().min(10).max(500),demoMode:z.boolean(),channelId:z.string().trim().max(100),channelSecret:z.string().max(200).optional(),accessToken:z.string().max(1000).optional()});
+export async function PUT(request:Request){const parsed=schema.safeParse(await request.json().catch(()=>null));if(!parsed.success)return NextResponse.json({error:"กรุณาตรวจสอบข้อมูลร้านและ LINE OA"},{status:400});const d=parsed.data;db.prepare("UPDATE settings SET store_name=?,phone=?,welcome_message=?,demo_mode=?,channel_id=?,channel_secret=CASE WHEN ?='' THEN channel_secret ELSE ? END,access_token=CASE WHEN ?='' THEN access_token ELSE ? END WHERE id=1").run(d.storeName,d.phone,d.welcomeMessage,d.demoMode?1:0,d.channelId,d.channelSecret??"",d.channelSecret??"",d.accessToken??"",d.accessToken??"");return NextResponse.json({ok:true});}

@@ -1,0 +1,3 @@
+import{NextResponse,type NextRequest}from"next/server";import{verifySession}from"@/lib/auth";
+export function proxy(request:NextRequest){const path=request.nextUrl.pathname;if(path.startsWith("/api/auth")||path==="/api/line/webhook"||path==="/login")return NextResponse.next();if((path.startsWith("/api/")||path!=="/")&&!verifySession(request.cookies.get("lsa_session")?.value)){if(path.startsWith("/api/"))return NextResponse.json({error:"Unauthorized"},{status:401});return NextResponse.redirect(new URL("/login",request.url))}return NextResponse.next()}
+export const config={matcher:["/((?!_next/static|_next/image|favicon.ico).*)"]};

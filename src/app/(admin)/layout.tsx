@@ -1,0 +1,2 @@
+import{cookies}from"next/headers";import{redirect}from"next/navigation";import type{ReactNode}from"react";import{verifySession}from"@/lib/auth";import{AppShell}from"@/components/app-shell";
+export default async function AdminLayout({children}:{children:ReactNode}){const session=(await cookies()).get("lsa_session")?.value;if(!verifySession(session))redirect("/login");return <AppShell>{children}</AppShell>}
