@@ -1,16 +1,18 @@
 # LINE Sales Assistant
 
-ระบบ Demo สำหรับร้านค้าออนไลน์ที่รวมแชต LINE OA, ลูกค้า, Lead, FAQ Automation และ Human Handoff ไว้ใน Dashboard เดียว ใช้ Next.js, TypeScript, Tailwind CSS และ SQLite โดยออกแบบชั้นข้อมูลให้ย้ายไป PostgreSQL ได้ภายหลัง
+ระบบ Demo สำหรับร้านค้าออนไลน์ที่รวมแชต LINE OA, ลูกค้า, Lead, FAQ Automation และ Human Handoff ไว้ใน Dashboard เดียว ใช้ Next.js, TypeScript, Tailwind CSS และ Neon PostgreSQL
 
 ## เปิดระบบ
 
 ```bash
 npm install
 copy .env.example .env.local
+npm run db:migrate
+npm run db:seed
 npm run dev
 ```
 
-เปิด `http://localhost:3000` แล้ว Login ด้วย `admin@demo.local` / `demo1234` ฐานข้อมูลและ Demo data จะถูกสร้างอัตโนมัติใน `data/` หากต้องการเริ่มข้อมูลใหม่ให้หยุด server แล้วรัน `npm run seed` ก่อนเปิดระบบอีกครั้ง
+ใส่ Neon connection string ใน `DATABASE_URL` แล้วเปิด `http://localhost:3000` Login ด้วย `admin@demo.local` / `demo1234` คำสั่ง seed จะข้ามการทำงานอัตโนมัติเมื่อมีข้อมูลลูกค้าอยู่แล้ว
 
 ## Golden Demo Flow
 
@@ -23,9 +25,9 @@ npm run dev
 
 ## เชื่อม LINE OA จริง
 
-กำหนด `LINE_CHANNEL_ID`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `AUTH_SECRET`, `DATABASE_URL` และ `NEXT_PUBLIC_APP_URL` ใน environment ของ server จากนั้นตั้ง Webhook URL ใน LINE Developers Console เป็น `https://your-domain/api/line/webhook` เปิด Use webhook และกด Verify ระบบตรวจ `x-line-signature` จาก raw body ก่อนประมวลผลและกัน event ซ้ำด้วย `webhookEventId`
+กำหนด `LINE_CHANNEL_ID`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `AUTH_SECRET`, `DATABASE_URL` และ `NEXT_PUBLIC_APP_URL` ใน environment ของ server จากนั้นรัน `npm run db:migrate` และ `npm run db:seed` หนึ่งครั้ง ตั้ง Webhook URL ใน LINE Developers Console เป็น `https://your-domain/api/line/webhook` เปิด Use webhook และกด Verify ระบบตรวจ `x-line-signature` จาก raw body ก่อนประมวลผลและกัน event ซ้ำด้วย `webhookEventId`
 
-Deploy ได้บน Node.js host ที่มี persistent disk โดยรัน `npm ci && npm run build && npm start` SQLite เหมาะกับ Demo/ร้านเดียว; production ที่มีหลาย process ควรเปลี่ยน database adapter เป็น PostgreSQL
+Deploy บน Vercel ได้โดยเชื่อม Neon Integration ให้มี `DATABASE_URL` แล้วรัน migration/seed ก่อน Redeploy ระบบใช้ Neon serverless driver จึงไม่พึ่ง filesystem ของ Vercel
 
 ## ตรวจสอบ
 

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { createSmartReply } from "@/lib/automation";
-import { db } from "@/lib/db";
+import { sql } from "@/lib/db";
 
 export const runtime = "nodejs";
 type LineEvent={webhookEventId?:string;type:string;replyToken?:string;source?:{userId?:string};message?:{type:string;text?:string};timestamp?:number};
@@ -15,19 +15,35 @@ export async function POST(request:Request){
   if(!secret||!validSignature(raw,request.headers.get("x-line-signature"),secret))return NextResponse.json({error:"Invalid signature"},{status:401});
   let payload:{events:LineEvent[]};try{payload=JSON.parse(raw) as {events:LineEvent[]};}catch{return NextResponse.json({error:"Invalid payload"},{status:400});}
   for(const event of payload.events){
-    if(event.type!=="message"||event.message?.type!=="text"||!event.message.text||!event.source?.userId)continue;
-    if(event.webhookEventId){try{db.prepare("INSERT INTO processed_webhooks(event_id,processed_at) VALUES(?,?)").run(event.webhookEventId,new Date().toISOString());}catch{continue;}}
-    const faqRows=db.prepare("SELECT question,answer,keywords FROM faqs WHERE active=1").all() as Array<{question:string;answer:string;keywords:string}>;
-    const smart=createSmartReply(event.message.text,faqRows.map((item)=>({...item,keywords:JSON.parse(item.keywords) as string[]})));
+    const message=event.message?.text;const userId=event.source?.userId;
+    if(event.type!=="message"||event.message?.type!=="text"||!message||!userId)continue;
+    if(event.webhookEventId){
+      const inserted=await sql`INSERT INTO processed_webhooks(event_id,processed_at) VALUES(${event.webhookEventId},${new Date().toISOString()}) ON CONFLICT(event_id) DO NOTHING RETURNING event_id`;
+      if(!inserted.length)continue;
+    }
+    const faqRows=await sql`SELECT question,answer,keywords FROM faqs WHERE active=TRUE` as {question:string;answer:string;keywords:unknown}[];
+    const smart=createSmartReply(message,faqRows.map((item)=>({question:item.question,answer:item.answer,keywords:Array.isArray(item.keywords)?item.keywords.map(String):[]})));
     const stamp=new Date(event.timestamp||Date.now()).toISOString();
-    const customerRow=db.prepare("SELECT id FROM customers WHERE line_user_id=?").get(event.source.userId) as {id:number}|undefined;
-    const customerId=customerRow?.id??Number(db.prepare("INSERT INTO customers(line_user_id,display_name,tags,created_at,updated_at) VALUES(?,?,'[\"ลูกค้าใหม่\"]',?,?)").run(event.source.userId,"ลูกค้า LINE",stamp,stamp).lastInsertRowid);
-    let conversation=db.prepare("SELECT id FROM conversations WHERE customer_id=? AND status!='CLOSED' ORDER BY id DESC LIMIT 1").get(customerId) as {id:number}|undefined;
-    if(!conversation)conversation={id:Number(db.prepare("INSERT INTO conversations(customer_id,status,last_message,last_message_at,created_at) VALUES(?,'AUTO',?,?,?)").run(customerId,event.message.text,stamp,stamp).lastInsertRowid)};
-    db.prepare("INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(?,'CUSTOMER',?,?)").run(conversation.id,event.message.text,stamp);
-    db.prepare("INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(?,'SYSTEM',?,?)").run(conversation.id,smart.reply,new Date(Date.now()+300).toISOString());
-    db.prepare("UPDATE conversations SET status=?,last_message=?,last_message_at=? WHERE id=?").run(smart.needsAdmin?"WAITING":"AUTO",event.message.text,stamp,conversation.id);
-    if(smart.shouldCreateLead)db.prepare("INSERT INTO leads(customer_id,product,phone,status,source,owner,created_at,updated_at) VALUES(?,?,?,'NEW','LINE OA','ทีมขาย',?,?) ON CONFLICT(customer_id) DO UPDATE SET phone=COALESCE(excluded.phone,leads.phone),status='INTERESTED',updated_at=excluded.updated_at").run(customerId,smart.captured.interestedProduct??"Oversize Classic",smart.captured.phone??null,stamp,stamp);
+    const [customer]=await sql`
+      INSERT INTO customers(line_user_id,display_name,tags,created_at,updated_at)
+      VALUES(${userId},'ลูกค้า LINE','["ลูกค้าใหม่"]'::jsonb,${stamp},${stamp})
+      ON CONFLICT(line_user_id) DO UPDATE SET updated_at=EXCLUDED.updated_at RETURNING id` as {id:number}[];
+    let [conversation]=await sql`SELECT id FROM conversations WHERE customer_id=${customer.id} AND status!='CLOSED' ORDER BY id DESC LIMIT 1` as {id:number}[];
+    if(!conversation){
+      [conversation]=await sql`
+        INSERT INTO conversations(customer_id,status,last_message,last_message_at,created_at)
+        VALUES(${customer.id},'AUTO',${message},${stamp},${stamp}) RETURNING id` as {id:number}[];
+    }
+    await sql.transaction([
+      sql`INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(${conversation.id},'CUSTOMER',${message},${stamp})`,
+      sql`INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(${conversation.id},'SYSTEM',${smart.reply},${new Date(Date.now()+300).toISOString()})`,
+      sql`UPDATE conversations SET status=${smart.needsAdmin?"WAITING":"AUTO"},last_message=${message},last_message_at=${stamp} WHERE id=${conversation.id}`,
+    ]);
+    if(smart.shouldCreateLead){
+      await sql`INSERT INTO leads(customer_id,product,phone,status,source,owner,created_at,updated_at)
+        VALUES(${customer.id},${smart.captured.interestedProduct??"Oversize Classic"},${smart.captured.phone??null},'NEW','LINE OA','ทีมขาย',${stamp},${stamp})
+        ON CONFLICT(customer_id) DO UPDATE SET phone=COALESCE(EXCLUDED.phone,leads.phone),status='INTERESTED',updated_at=EXCLUDED.updated_at`;
+    }
     if(event.replyToken&&token)await replyToLine(event.replyToken,smart.reply,token);
   }
   return NextResponse.json({ok:true});
