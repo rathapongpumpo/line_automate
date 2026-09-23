@@ -57,11 +57,12 @@ export default function DemoPage() {
     ]);
     setInput("");
     setBusy(true);
+    const idempotencyKey = crypto.randomUUID();
     try {
       const response = await fetch("/api/demo/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: clean }),
+        body: JSON.stringify({ message: clean, idempotencyKey }),
       });
       const body = (await response.json()) as {
         reply?: string;
@@ -70,15 +71,7 @@ export default function DemoPage() {
       };
       if (!response.ok) throw new Error(body.error);
       await new Promise((resolve) => setTimeout(resolve, 450));
-      setMessages((items) => [
-        ...items,
-        {
-          id: idRef.current++,
-          sender: "SYSTEM",
-          body: body.reply || "",
-          time: currentTime(),
-        },
-      ]);
+      if (body.reply) setMessages((items) => [...items, { id: idRef.current++, sender: "SYSTEM", body: body.reply as string, time: currentTime() }]);
       await refresh();
       if (body.status === "WAITING") toast("ส่งต่อให้ Admin แล้ว", "info");
     } catch {

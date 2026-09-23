@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
-import { sql } from "@/lib/db";
-
+import { transitionConversation } from "@/lib/conversation/service";
 export async function POST(_: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const conversationId = Number(id);
-  if (!Number.isInteger(conversationId)) return NextResponse.json({ error: "Conversation ไม่ถูกต้อง" }, { status: 400 });
-  const stamp = new Date().toISOString();
-  const rows = await sql`UPDATE conversations SET status='ADMIN',last_message_at=${stamp} WHERE id=${conversationId} RETURNING id`;
-  if (!rows.length) return NextResponse.json({ error: "ไม่พบการสนทนา" }, { status: 404 });
-  await sql`INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(${conversationId},'ADMIN','เจ้าหน้าที่รับช่วงการสนทนาแล้วครับ',${stamp})`;
-  return NextResponse.json({ ok: true });
+  if (!/^\d+$/.test(id)) return NextResponse.json({ error: "Conversation ไม่ถูกต้อง" }, { status: 400 });
+  try { const result = await transitionConversation(Number(id), "TAKEOVER"); return result.found ? NextResponse.json({ ok: true, status: result.to }) : NextResponse.json({ error: "ไม่พบการสนทนา" }, { status: 404 }); }
+  catch { return NextResponse.json({ error: "สถานะปัจจุบันไม่อนุญาตให้รับช่วง" }, { status: 409 }); }
 }

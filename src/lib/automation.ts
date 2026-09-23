@@ -27,7 +27,11 @@ export function extractCustomerData(input: string): CapturedFields {
   return { ...(name && { name }), ...(phone && { phone }), ...(color && { color }), ...(size && { size }), ...(interestedProduct && { interestedProduct }) };
 }
 
-export function createSmartReply(input: string, faqs: Array<{ question: string; answer: string; keywords: string[] }> = []): SmartReply {
+export function createSmartReply(
+  input: string,
+  faqs: Array<{ question: string; answer: string; keywords: string[] }> = [],
+  options: { faqEnabled?: boolean } = {},
+): SmartReply {
   const text = normalize(input);
   const captured = extractCustomerData(input);
   const leadIntent = /สนใจ|ซื้อ|สั่ง|เอา|จอง|ขอราคา/.test(text);
@@ -47,7 +51,7 @@ export function createSmartReply(input: string, faqs: Array<{ question: string; 
   if (/cod|เก็บเงินปลายทาง/.test(text)) {
     return { reply: "มีบริการเก็บเงินปลายทางครับ", intent: "COD", needsAdmin: false, shouldCreateLead: leadIntent, captured };
   }
-  const faq = faqs.find((item) => item.keywords.some((keyword) => text.includes(normalize(keyword))) || text.includes(normalize(item.question)));
+  const faq = options.faqEnabled === false ? undefined : faqs.find((item) => item.keywords.some((keyword) => text.includes(normalize(keyword))) || text.includes(normalize(item.question)));
   if (faq) {
     return { reply: faq.answer, intent: "FAQ", needsAdmin: false, shouldCreateLead: leadIntent, captured };
   }

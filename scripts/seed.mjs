@@ -95,6 +95,6 @@ for (const notice of [
 }
 
 await sql`INSERT INTO settings(id,store_name,phone,welcome_message,demo_mode,channel_id,channel_secret,access_token)
-  VALUES(1,'WLB Store','02-123-4567','สวัสดีครับ 👋\nยินดีต้อนรับสู่ WLB Store\nสอบถามสินค้า ราคา ไซซ์ หรือการจัดส่งได้เลยครับ',${process.env.DEMO_MODE !== "false"},${process.env.LINE_CHANNEL_ID ?? ""},${process.env.LINE_CHANNEL_SECRET ?? ""},${process.env.LINE_CHANNEL_ACCESS_TOKEN ?? ""})`;
+  VALUES(1,'WLB Store','02-123-4567','สวัสดีครับ 👋\nยินดีต้อนรับสู่ WLB Store\nสอบถามสินค้า ราคา ไซซ์ หรือการจัดส่งได้เลยครับ',${process.env.DEMO_MODE !== "false"},NULL,NULL,NULL)`;
 
 console.log("Neon seed completed.");

@@ -1,50 +1,47 @@
-import crypto from "node:crypto";
-import { NextResponse } from "next/server";
-import { createSmartReply } from "@/lib/automation";
+import { after, NextResponse } from "next/server";
+import { normalizeLineEvent, webhookPayloadSchema } from "@/lib/line/events";
+import { verifyLineSignature } from "@/lib/line/signature";
 import { sql } from "@/lib/db";
+import { processJobByDedupeKey } from "@/lib/jobs/worker";
 
 export const runtime = "nodejs";
-type LineEvent={webhookEventId?:string;type:string;replyToken?:string;source?:{userId?:string};message?:{type:string;text?:string};timestamp?:number};
+const maxBodyBytes = 1024 * 1024;
 
-function validSignature(body:string,signature:string|null,secret:string){if(!signature)return false;const expected=crypto.createHmac("sha256",secret).update(body).digest("base64");return signature.length===expected.length&&crypto.timingSafeEqual(Buffer.from(signature),Buffer.from(expected));}
-
-async function replyToLine(replyToken:string,text:string,token:string){const response=await fetch("https://api.line.me/v2/bot/message/reply",{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({replyToken,messages:[{type:"text",text}]})});if(!response.ok)throw new Error(`LINE reply failed: ${response.status}`);}
-
-export async function POST(request:Request){
-  const raw=await request.text();const secret=process.env.LINE_CHANNEL_SECRET||"";const token=process.env.LINE_CHANNEL_ACCESS_TOKEN||"";
-  if(!secret||!validSignature(raw,request.headers.get("x-line-signature"),secret))return NextResponse.json({error:"Invalid signature"},{status:401});
-  let payload:{events:LineEvent[]};try{payload=JSON.parse(raw) as {events:LineEvent[]};}catch{return NextResponse.json({error:"Invalid payload"},{status:400});}
-  for(const event of payload.events){
-    const message=event.message?.text;const userId=event.source?.userId;
-    if(event.type!=="message"||event.message?.type!=="text"||!message||!userId)continue;
-    if(event.webhookEventId){
-      const inserted=await sql`INSERT INTO processed_webhooks(event_id,processed_at) VALUES(${event.webhookEventId},${new Date().toISOString()}) ON CONFLICT(event_id) DO NOTHING RETURNING event_id`;
-      if(!inserted.length)continue;
-    }
-    const faqRows=await sql`SELECT question,answer,keywords FROM faqs WHERE active=TRUE` as {question:string;answer:string;keywords:unknown}[];
-    const smart=createSmartReply(message,faqRows.map((item)=>({question:item.question,answer:item.answer,keywords:Array.isArray(item.keywords)?item.keywords.map(String):[]})));
-    const stamp=new Date(event.timestamp||Date.now()).toISOString();
-    const [customer]=await sql`
-      INSERT INTO customers(line_user_id,display_name,tags,created_at,updated_at)
-      VALUES(${userId},'ลูกค้า LINE','["ลูกค้าใหม่"]'::jsonb,${stamp},${stamp})
-      ON CONFLICT(line_user_id) DO UPDATE SET updated_at=EXCLUDED.updated_at RETURNING id` as {id:number}[];
-    let [conversation]=await sql`SELECT id FROM conversations WHERE customer_id=${customer.id} AND status!='CLOSED' ORDER BY id DESC LIMIT 1` as {id:number}[];
-    if(!conversation){
-      [conversation]=await sql`
-        INSERT INTO conversations(customer_id,status,last_message,last_message_at,created_at)
-        VALUES(${customer.id},'AUTO',${message},${stamp},${stamp}) RETURNING id` as {id:number}[];
-    }
+export async function POST(request: Request) {
+  const length = Number(request.headers.get("content-length") ?? 0);
+  if (length > maxBodyBytes) return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  const raw = await request.text();
+  if (Buffer.byteLength(raw, "utf8") > maxBodyBytes) return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  const secret = process.env.LINE_CHANNEL_SECRET ?? "";
+  if (!verifyLineSignature(raw, request.headers.get("x-line-signature"), secret)) return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  let json: unknown;
+  try { json = JSON.parse(raw); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
+  const parsed = webhookPayloadSchema.safeParse(json);
+  if (!parsed.success) return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+  const accepted: Array<{ eventId: string; dedupeKey: string }> = [];
+  const rejected: Array<{ index: number; error: string }> = [];
+  for (const [index, rawEvent] of parsed.data.events.entries()) {
+    let event;
+    try {
+      event = normalizeLineEvent(rawEvent);
+    } catch { rejected.push({ index, error: "UNSUPPORTED_OR_INVALID_EVENT" }); }
+    if (!event) continue;
+    const dedupeKey = `line-event:${event.eventId}`;
+    // Persistence failures must escape as 5xx so LINE redelivery can recover.
     await sql.transaction([
-      sql`INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(${conversation.id},'CUSTOMER',${message},${stamp})`,
-      sql`INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(${conversation.id},'SYSTEM',${smart.reply},${new Date(Date.now()+300).toISOString()})`,
-      sql`UPDATE conversations SET status=${smart.needsAdmin?"WAITING":"AUTO"},last_message=${message},last_message_at=${stamp} WHERE id=${conversation.id}`,
+      sql`INSERT INTO webhook_events(event_id,event_type,source_type,source_user_id,source_group_id,source_room_id,line_timestamp,is_redelivery,payload)
+          VALUES(${event.eventId},${event.type},${event.source.type},${event.source.userId ?? null},${event.source.groupId ?? null},${event.source.roomId ?? null},${event.occurredAt},${event.isRedelivery},${JSON.stringify(event)}::jsonb)
+          ON CONFLICT(event_id) DO UPDATE SET is_redelivery=webhook_events.is_redelivery OR EXCLUDED.is_redelivery`,
+      sql`INSERT INTO jobs(job_type,dedupe_key,payload,max_attempts) VALUES('LINE_EVENT',${dedupeKey},${JSON.stringify({ eventId: event.eventId, event })}::jsonb,8) ON CONFLICT(dedupe_key) DO NOTHING`,
     ]);
-    if(smart.shouldCreateLead){
-      await sql`INSERT INTO leads(customer_id,product,phone,status,source,owner,created_at,updated_at)
-        VALUES(${customer.id},${smart.captured.interestedProduct??"Oversize Classic"},${smart.captured.phone??null},'NEW','LINE OA','ทีมขาย',${stamp},${stamp})
-        ON CONFLICT(customer_id) DO UPDATE SET phone=COALESCE(EXCLUDED.phone,leads.phone),status='INTERESTED',updated_at=EXCLUDED.updated_at`;
-    }
-    if(event.replyToken&&token)await replyToLine(event.replyToken,smart.reply,token);
+    accepted.push({ eventId: event.eventId, dedupeKey });
   }
-  return NextResponse.json({ok:true});
+  if (accepted.length) {
+    // Best-effort latency optimization only. Durable jobs are reclaimed by the
+    // authenticated worker, so correctness never depends on this callback.
+    after(async () => {
+      for (const item of accepted) await processJobByDedupeKey(item.dedupeKey);
+    });
+  }
+  return NextResponse.json({ ok: true, accepted: accepted.length, rejected });
 }

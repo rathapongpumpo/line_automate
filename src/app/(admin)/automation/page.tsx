@@ -31,9 +31,10 @@ export default function AutomationPage() {
         phone: s.phone,
         welcomeMessage: welcome ?? s.welcomeMessage,
         demoMode: s.demoMode,
-        channelId: s.channelId,
-        channelSecret: "",
-        accessToken: "",
+        businessTimezone: s.businessTimezone,
+        businessHours: s.businessHours,
+        awayMessage: s.awayMessage,
+        outsideHoursBot: s.outsideHoursBot,
       }),
     });
     setBusy(false);
