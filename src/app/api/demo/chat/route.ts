@@ -48,12 +48,17 @@ export async function POST(request: Request) {
 
   if (smart.shouldCreateLead) {
     const product = fields.interestedProduct ?? "Oversize Classic";
-    await sql.transaction([
-      sql`INSERT INTO leads(customer_id,product,phone,status,source,owner,created_at,updated_at)
+    await sql`
+      WITH upserted_lead AS (
+        INSERT INTO leads(customer_id,product,phone,status,source,owner,created_at,updated_at)
           VALUES(${customer.id},${product},${fields.phone ?? null},'NEW','LINE Demo','ทีมขาย',${stamp},${stamp})
-          ON CONFLICT(customer_id) DO UPDATE SET product=EXCLUDED.product,phone=COALESCE(EXCLUDED.phone,leads.phone),status=CASE WHEN leads.status IN ('WON','LOST') THEN leads.status ELSE 'INTERESTED' END,updated_at=EXCLUDED.updated_at`,
-      sql`INSERT INTO notifications(type,title,body,is_read,created_at,conversation_id,customer_id,dedupe_key) VALUES('LEAD','Lead ใหม่','ลูกค้า Demo แสดงความสนใจสินค้า',FALSE,${stamp},${conversation.id},${customer.id},${`demo-lead:${stamp}`}) ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
-    ]);
+          ON CONFLICT(customer_id) DO UPDATE SET product=EXCLUDED.product,phone=COALESCE(EXCLUDED.phone,leads.phone),status=CASE WHEN leads.status IN ('WON','LOST') THEN leads.status ELSE 'INTERESTED' END,updated_at=EXCLUDED.updated_at
+          RETURNING id
+      )
+      INSERT INTO notifications(type,title,body,is_read,created_at,conversation_id,customer_id,lead_id,reference_type,reference_id,dedupe_key)
+      SELECT 'LEAD','Lead ใหม่','ลูกค้า Demo แสดงความสนใจสินค้า',FALSE,${stamp},${conversation.id},${customer.id},id,'lead',id::text,${`demo-lead:${parsed.data.idempotencyKey}`}
+      FROM upserted_lead
+      ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`;
   }
   if (!suppressed && smart.needsAdmin) {
     await sql`INSERT INTO notifications(type,title,body,is_read,created_at,conversation_id,customer_id,dedupe_key) VALUES('WAITING','ลูกค้ารอ Admin','ลูกค้า Demo ต้องการให้เจ้าหน้าที่ช่วยดูแล',FALSE,${stamp},${conversation.id},${customer.id},${`demo-waiting:${stamp}`}) ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`;

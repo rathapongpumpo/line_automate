@@ -1,6 +1,6 @@
 "use client";
 import { Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAppState } from "@/hooks/use-app-state";
 import { EmptyState, Spinner, Status, useToast } from "@/components/ui";
@@ -13,15 +13,23 @@ const filters: Array<{ value: "ALL" | LeadStatus; label: string }> = [
   { value: "WON", label: "ปิดการขาย" },
   { value: "LOST", label: "ไม่สำเร็จ" },
 ];
+const targetId = (value: string | null) => {
+  const id = Number(value);
+  return value && Number.isInteger(id) && id > 0 ? id : undefined;
+};
 export default function LeadsPage() {
   const params = useSearchParams();
+  const requestedLeadId = targetId(params.get("lead"));
+  return <LeadsContent key={requestedLeadId ?? "leads"} requestedLeadId={requestedLeadId} />;
+}
+
+function LeadsContent({ requestedLeadId }: { requestedLeadId?: number }) {
   const { data, loading, refresh } = useAppState();
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"ALL" | LeadStatus>("ALL");
-  const [selectedId, setSelectedId] = useState<number | undefined>(
-    params.get("lead") ? Number(params.get("lead")) : undefined,
-  );
+  const [selectedId, setSelectedId] = useState<number | undefined>(requestedLeadId);
+  const detailRef = useRef<HTMLElement>(null);
   const leads = useMemo(
     () =>
       data?.leads.filter(
@@ -34,6 +42,10 @@ export default function LeadsPage() {
     [data, filter, query],
   );
   const selected = data?.leads.find((item) => item.id === selectedId);
+  useEffect(() => {
+    if (!requestedLeadId || !selected || !window.matchMedia("(max-width: 1279px)").matches) return;
+    detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [requestedLeadId, selected]);
   async function updateStatus(status: LeadStatus) {
     if (!selected) return;
     const response = await fetch(`/api/leads/${selected.id}`, {
@@ -174,7 +186,7 @@ export default function LeadsPage() {
             </>
           )}
         </section>
-        <aside className="panel h-fit p-5">
+        <aside ref={detailRef} className="panel h-fit scroll-mt-20 p-5">
           <h2 className="font-semibold">รายละเอียด Lead</h2>
           {selected ? (
             <div className="mt-5 space-y-5">

@@ -8,6 +8,10 @@ import type { Conversation, Message } from "@/lib/types";
 
 const time = (value: string) => new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }).format(new Date(value));
 const iso = (value: unknown) => new Date(String(value)).toISOString();
+const targetId = (value: string | null) => {
+  const id = Number(value);
+  return value && Number.isInteger(id) && id > 0 ? id : undefined;
+};
 const mapMessage = (row: Record<string, unknown>): Message => ({
   id: Number(row.id), conversationId: Number(row.conversation_id), sender: row.sender as Message["sender"], body: String(row.body), createdAt: iso(row.created_at),
   messageType: String(row.message_type ?? "text"), deliveryStatus: String(row.delivery_status ?? "RECEIVED") as Message["deliveryStatus"], payload: (row.payload ?? {}) as Record<string, unknown>,
@@ -17,13 +21,19 @@ const mapMessage = (row: Record<string, unknown>): Message => ({
 function Avatar({ conversation, size = "size-10" }: { conversation: Conversation; size?: string }) { const customer=conversation.customer; return customer.pictureUrl ? <span role="img" aria-label={customer.displayName} className={`${size} shrink-0 rounded-full bg-cover bg-center`} style={{backgroundImage:`url(${customer.pictureUrl})`}}/> : <span className={`grid ${size} shrink-0 place-items-center rounded-full bg-slate-100 font-semibold`}>{customer.displayName.slice(0,1)}</span>; }
 
 export default function InboxPage() {
-  const params=useSearchParams(); const toast=useToast();
+  const params=useSearchParams();
+  const requestedConversationId=targetId(params.get("conversation"));
+  return <InboxContent key={requestedConversationId??"inbox"} requestedConversationId={requestedConversationId}/>;
+}
+
+function InboxContent({requestedConversationId}:{requestedConversationId?:number}) {
+  const toast=useToast();
   const [conversations,setConversations]=useState<Conversation[]>([]); const [messages,setMessages]=useState<Message[]>([]); const [loading,setLoading]=useState(true); const [query,setQuery]=useState(""); const [page,setPage]=useState(1); const [hasMore,setHasMore]=useState(false);
-  const [selectedId,setSelectedId]=useState<number|undefined>(params.get("conversation")?Number(params.get("conversation")):undefined); const [pane,setPane]=useState<"list"|"chat"|"detail">("list");
+  const [selectedId,setSelectedId]=useState<number|undefined>(requestedConversationId); const [pane,setPane]=useState<"list"|"chat"|"detail">(requestedConversationId?"chat":"list");
   const [message,setMessage]=useState(""); const [pendingKey,setPendingKey]=useState<string|null>(null); const [busy,setBusy]=useState(false);
   const selected=useMemo(()=>conversations.find((item)=>item.id===(selectedId??conversations[0]?.id)),[conversations,selectedId]);
 
-  async function loadConversations(nextPage=1, append=false) { const response=await fetch(`/api/conversations?page=${nextPage}&limit=30&q=${encodeURIComponent(query)}`,{cache:"no-store"}); if(!response.ok)throw new Error(); const body=await response.json() as {items:Conversation[];hasMore:boolean}; setConversations((old)=>append?[...old,...body.items]:body.items); setHasMore(body.hasMore); setPage(nextPage); if(!selectedId&&body.items[0])setSelectedId(body.items[0].id); }
+  async function loadConversations(nextPage=1, append=false) { const target=requestedConversationId?`&selected=${requestedConversationId}`:""; const response=await fetch(`/api/conversations?page=${nextPage}&limit=30&q=${encodeURIComponent(query)}${target}`,{cache:"no-store"}); if(!response.ok)throw new Error(); const body=await response.json() as {items:Conversation[];hasMore:boolean}; setConversations((old)=>append?[...old,...body.items]:body.items); setHasMore(body.hasMore); setPage(nextPage); if(!selectedId&&body.items[0])setSelectedId(body.items[0].id); }
   async function loadMessages(id:number) { const response=await fetch(`/api/conversations/${id}/messages?limit=50`,{cache:"no-store"}); if(!response.ok)throw new Error(); const body=await response.json() as {items:Record<string,unknown>[]}; setMessages(body.items.map(mapMessage)); }
   useEffect(()=>{const timer=setTimeout(()=>{setLoading(true); loadConversations().catch(()=>toast("โหลดรายการไม่สำเร็จ","error")).finally(()=>setLoading(false));},300); return()=>clearTimeout(timer);},[query]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{if(!selected)return; let active=true; let delay=3000; let timer:ReturnType<typeof setTimeout>; const poll=async()=>{try{await loadMessages(selected.id);delay=3000;}catch{delay=Math.min(delay*2,15000);} if(active)timer=setTimeout(poll,delay);}; void poll(); return()=>{active=false;clearTimeout(timer);};},[selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps

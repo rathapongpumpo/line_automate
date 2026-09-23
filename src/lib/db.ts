@@ -43,7 +43,24 @@ export async function getAppState(): Promise<AppState> {
     sql`SELECT * FROM faqs ORDER BY updated_at DESC`,
     sql`SELECT * FROM products ORDER BY id`,
     sql`SELECT * FROM automation_rules ORDER BY id`,
-    sql`SELECT * FROM notifications ORDER BY created_at DESC LIMIT 20`,
+    sql`SELECT n.*,
+      COALESCE(n.conversation_id, CASE WHEN n.type!='LEAD' THEN (
+        SELECT v.id FROM conversations v
+        WHERE v.customer_id=COALESCE(n.customer_id,legacy_customer.id)
+        ORDER BY ABS(EXTRACT(EPOCH FROM (v.last_message_at-n.created_at))) LIMIT 1
+      ) END) AS target_conversation_id,
+      COALESCE(n.lead_id, CASE WHEN n.type='LEAD' THEN (
+        SELECT l.id FROM leads l
+        WHERE l.customer_id=COALESCE(n.customer_id,legacy_customer.id)
+        ORDER BY ABS(EXTRACT(EPOCH FROM (l.created_at-n.created_at))) LIMIT 1
+      ) END) AS target_lead_id
+      FROM notifications n
+      LEFT JOIN LATERAL (
+        SELECT c.id FROM customers c
+        WHERE n.customer_id IS NULL AND n.body LIKE c.display_name || '%'
+        ORDER BY LENGTH(c.display_name) DESC LIMIT 1
+      ) legacy_customer ON TRUE
+      ORDER BY n.created_at DESC LIMIT 20`,
     sql`SELECT id,store_name,phone,welcome_message,demo_mode,business_timezone,business_hours,away_message,outside_hours_bot FROM settings WHERE id = 1`,
   ]);
 
@@ -76,7 +93,9 @@ export async function getAppState(): Promise<AppState> {
   }));
   const notifications = (notificationRows as Record<string, unknown>[]).map((row): Notification => ({
     id: Number(row.id), type: String(row.type), title: String(row.title), body: String(row.body), read: Boolean(row.is_read), createdAt: toIso(row.created_at),
-    conversationId: row.conversation_id ? Number(row.conversation_id) : null, referenceType: row.reference_type ? String(row.reference_type) : null, referenceId: row.reference_id ? String(row.reference_id) : null,
+    conversationId: row.target_conversation_id ? Number(row.target_conversation_id) : null, leadId: row.target_lead_id ? Number(row.target_lead_id) : null,
+    referenceType: row.reference_type ? String(row.reference_type) : row.type === "LEAD" && row.target_lead_id ? "lead" : row.target_conversation_id ? "conversation" : null,
+    referenceId: row.reference_id ? String(row.reference_id) : null,
   }));
   const settingsRow = (settingsRows[0] ?? {}) as Record<string, unknown>;
   const startOfToday = new Date();

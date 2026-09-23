@@ -37,10 +37,12 @@ const conversationSeed = [
   [8, "ADMIN", "สนใจสีขาว L ค่ะ", 520], [9, "AUTO", "มีเก็บเงินปลายทางไหมครับ", 700], [1, "CLOSED", "เปลี่ยนไซซ์เรียบร้อยค่ะ", 900], [2, "AUTO", "มีโปรอะไรบ้าง", 1100],
   [3, "CLOSED", "ขอบคุณค่ะ", 1500], [4, "ADMIN", "เบอร์ 0991028374 ครับ", 1800], [5, "CLOSED", "สั่งซื้อแล้วค่ะ", 2100], [7, "AUTO", "ไซซ์ M ยังมีไหมครับ", 2400],
 ];
+const conversationIds = [];
 for (const [customerIndex, status, lastMessage, minutesAgo] of conversationSeed) {
   const [conversation] = await sql`
     INSERT INTO conversations(customer_id,status,last_message,last_message_at,created_at)
     VALUES(${customerIds[customerIndex]},${status},${lastMessage},${iso(minutesAgo)},${iso(minutesAgo + 30)}) RETURNING id`;
+  conversationIds.push(Number(conversation.id));
   await sql`INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(${conversation.id},'CUSTOMER',${lastMessage},${iso(minutesAgo)})`;
   if (status !== "WAITING") {
     await sql`INSERT INTO messages(conversation_id,sender,body,created_at) VALUES(${conversation.id},${status === "ADMIN" ? "ADMIN" : "SYSTEM"},${status === "ADMIN" ? "รับช่วงดูแลให้แล้วครับ" : "ยินดีช่วยดูแลครับ สอบถามเพิ่มเติมได้เลย"},${iso(minutesAgo - 1)})`;
@@ -48,9 +50,11 @@ for (const [customerIndex, status, lastMessage, minutesAgo] of conversationSeed)
 }
 
 const leadStatuses = ["INTERESTED", "NEW", "CONTACTED", "WON", "NEW", "WON", "LOST", "CONTACTED", "INTERESTED", "NEW"];
+const leadIds = [];
 for (let index = 0; index < customerSeed.length; index += 1) {
-  await sql`INSERT INTO leads(customer_id,product,phone,status,source,owner,created_at,updated_at)
-    VALUES(${customerIds[index]},${customerSeed[index][5]},${customerSeed[index][2]},${leadStatuses[index]},'LINE OA',${index % 3 === 0 ? "ณิชา" : "ทีมขาย"},${iso(index * 240 + 20)},${iso(index * 90)})`;
+  const [lead] = await sql`INSERT INTO leads(customer_id,product,phone,status,source,owner,created_at,updated_at)
+    VALUES(${customerIds[index]},${customerSeed[index][5]},${customerSeed[index][2]},${leadStatuses[index]},'LINE OA',${index % 3 === 0 ? "ณิชา" : "ทีมขาย"},${iso(index * 240 + 20)},${iso(index * 90)}) RETURNING id`;
+  leadIds.push(Number(lead.id));
 }
 
 const faqSeed = [
@@ -85,13 +89,19 @@ for (const rule of [
 }
 
 for (const notice of [
-  ["WAITING", "ลูกค้ารอ Admin", "เมย์ขอคุยกับเจ้าหน้าที่", false, 5],
-  ["LEAD", "Lead ใหม่", "สมชายสนใจ Oversize Classic", false, 12],
-  ["UNKNOWN", "ระบบตอบไม่ได้", "วรรณสอบถามใบกำกับภาษี", false, 30],
-  ["INTENT", "พบความตั้งใจซื้อ", "อรสนใจสีขาว L", true, 90],
-  ["LEAD", "Lead ใหม่", "กิตติแจ้งเบอร์ติดต่อ", true, 150],
+  ["WAITING", "ลูกค้ารอ Admin", "เมย์ขอคุยกับเจ้าหน้าที่", false, 5, 1, 1, null],
+  ["LEAD", "Lead ใหม่", "สมชายสนใจ Oversize Classic", false, 12, 0, 0, 0],
+  ["UNKNOWN", "ระบบตอบไม่ได้", "วรรณสอบถามใบกำกับภาษี", false, 30, 6, 6, null],
+  ["INTENT", "พบความตั้งใจซื้อ", "อรสนใจสีขาว L", true, 90, 8, 8, null],
+  ["LEAD", "Lead ใหม่", "กิตติแจ้งเบอร์ติดต่อ", true, 150, 4, 4, 4],
 ]) {
-  await sql`INSERT INTO notifications(type,title,body,is_read,created_at) VALUES(${notice[0]},${notice[1]},${notice[2]},${notice[3]},${iso(notice[4])})`;
+  const customerIndex = Number(notice[5]);
+  const conversationIndex = Number(notice[6]);
+  const leadIndex = notice[7] === null ? null : Number(notice[7]);
+  const referenceType = leadIndex === null ? "conversation" : "lead";
+  const referenceId = leadIndex === null ? conversationIds[conversationIndex] : leadIds[leadIndex];
+  await sql`INSERT INTO notifications(type,title,body,is_read,created_at,conversation_id,customer_id,lead_id,reference_type,reference_id)
+    VALUES(${notice[0]},${notice[1]},${notice[2]},${notice[3]},${iso(notice[4])},${conversationIds[conversationIndex]},${customerIds[customerIndex]},${leadIndex === null ? null : leadIds[leadIndex]},${referenceType},${String(referenceId)})`;
 }
 
 await sql`INSERT INTO settings(id,store_name,phone,welcome_message,demo_mode,channel_id,channel_secret,access_token)
